@@ -735,6 +735,30 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
         this.activeStatement = null;
     }
 
+    function expandFileStorage(node, newCapacity) {
+        var prevCapacity = node.contents ? node.contents.length : 0;
+        // No need to expand, the storage was already large enough.
+        // Don't expand strictly to the given requested limit if it's
+        // only a very small increase, but instead geometrically grow capacity.
+        if (prevCapacity >= newCapacity) return;
+        // For small filesizes (<1MB), perform size*2 geometric increase, but
+        // for large sizes, do a much more conservative size*1.125 increase to
+        // avoid overshooting the allocation cap by a very large margin.
+        var CAPACITY_DOUBLING_MAX = 1024 * 1024;
+        var capacityCoef = prevCapacity < CAPACITY_DOUBLING_MAX ? 2.0 : 1.125;
+        var newAutoCapacity = prevCapacity * capacityCoef;
+        newCapacity = Math.max(newCapacity, newAutoCapacity | 0);
+        // At minimum allocate 256b for each file when expanding.
+        if (prevCapacity !== 0) newCapacity = Math.max(newCapacity, 256);
+        var oldContents = node.contents;
+        node.contents = new Uint8Array(newCapacity); // Allocate new storage.
+
+        if (node.usedBytes > 0) {
+            // Copy old data over to the new storage.
+            node.contents.set(oldContents.subarray(0, node.usedBytes), 0);
+        }
+    }
+
     /**
      * @typedef {{ done:true, value:undefined } |
      *           { done:false, value:Statement}}
@@ -822,7 +846,7 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
     * @param {number[]} data An array of bytes representing
     * an SQLite database file
     */
-    function Database(data) {
+    function Database(data, initialDbSize) {
         this.filename = "dbfile_" + (0xffffffff * Math.random() >>> 0);
         if (data != null) {
             FS.createDataFile("/", this.filename, data, true, true);
@@ -830,6 +854,14 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
         this.handleError(sqlite3_open(this.filename, apiTemp));
         this.db = getValue(apiTemp, "i32");
         registerExtensionFunctions(this.db);
+
+        if (initialDbSize) {
+            this.run("VACUUM");
+            var parentNode = FS.lookupPath("/").node;
+            var dbNode = FS.lookupNode(parentNode, this.filename);
+            expandFileStorage(dbNode, initialDbSize);
+        }
+
         // A list of all prepared statements of the database
         this.statements = {};
         // A list of all user function of the database
