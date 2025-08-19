@@ -1,3 +1,10 @@
+.devcontainer
+.eslintrc.js
+.jsdoc.config.json
+.nojekyll
+CONTRIBUTING.md
+documentation_index.md
+logo.svg
 test/
 c/
 gh-pages/
